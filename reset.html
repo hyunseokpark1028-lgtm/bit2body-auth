@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>bit2body 비밀번호 재설정</title>
+<style>
+  :root { --ink:#101828; --slate:#5b6b82; --line:#e3e8ef; --accent:#2f80ed; --ice:#f4f7fb; --bad:#d64545; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px 16px; background:var(--ice);
+         font-family: "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif; color:var(--ink); }
+  .card { width:100%; max-width:400px; background:#fff; border:1px solid var(--line); border-radius:22px; padding:28px 22px; }
+  .brand { font-weight:800; font-size:18px; color:var(--accent); letter-spacing:-.02em; }
+  h1 { margin:10px 0 6px; font-size:24px; letter-spacing:-.03em; }
+  p { margin:0 0 18px; color:var(--slate); font-size:15px; line-height:1.55; }
+  label { display:block; margin:14px 0 6px; font-size:14px; font-weight:700; }
+  input { width:100%; padding:14px; border:1px solid var(--line); border-radius:14px; font-size:16px; }
+  input:focus { outline:2px solid var(--accent); border-color:transparent; }
+  button { width:100%; margin-top:20px; padding:15px; border:0; border-radius:14px; background:var(--accent); color:#fff;
+           font-size:16px; font-weight:800; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .msg { margin-top:14px; font-size:14px; color:var(--bad); min-height:1em; }
+  .hide { display:none; }
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="brand">bit2body</div>
+
+  <section id="form">
+    <h1>새 비밀번호 설정</h1>
+    <p>새로 쓸 비밀번호를 입력하세요. 바꾼 뒤에는 앱에서 새 비밀번호로 로그인하면 됩니다.</p>
+    <label for="pw">새 비밀번호 (6자 이상)</label>
+    <input id="pw" type="password" autocomplete="new-password" minlength="6">
+    <label for="pw2">한 번 더 입력</label>
+    <input id="pw2" type="password" autocomplete="new-password" minlength="6">
+    <button id="save" type="button">비밀번호 바꾸기</button>
+    <div class="msg" id="msg" role="alert"></div>
+  </section>
+
+  <section id="done" class="hide">
+    <h1>비밀번호를 바꿨어요</h1>
+    <p>이제 bit2body 앱에서 새 비밀번호로 로그인하세요. 이 창은 닫아도 됩니다.</p>
+  </section>
+
+  <section id="bad" class="hide">
+    <h1>링크를 쓸 수 없어요</h1>
+    <p>링크가 만료됐거나 이미 사용됐어요. 앱에서 <b>비밀번호 찾기</b>를 다시 눌러 새 메일을 받아 주세요.</p>
+  </section>
+</main>
+<script>
+  // 공개용 anon 키(앱에도 들어 있는 키, RLS로 보호). 관리자 키 아님.
+  const SB = "https://pfldoyxfwzeddlpfkuda.supabase.co";
+  const KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBmbGRveXhmd3plZGRscGZrdWRhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTExOTQ0MzQsImV4cCI6MjEwNjc3MDQzNH0.S_hix76MwrEoNRpzuz4yO5UNM8eN-wAl40AJfolxrbk";
+
+  const q = new URLSearchParams(location.search);
+  const h = new URLSearchParams(location.hash.slice(1));
+  const tokenHash = q.get("token_hash");            // 메일 템플릿 방식(권장)
+  let accessToken = h.get("access_token");          // 예전 리디렉트 방식도 지원
+  const $ = (id) => document.getElementById(id);
+  const show = (id) => ["form", "done", "bad"].forEach((s) => $(s).classList.toggle("hide", s !== id));
+
+  if ((!tokenHash && !accessToken) || q.get("error") || h.get("error")) show("bad");
+  history.replaceState(null, "", location.pathname);   // 주소창에서 토큰 지우기
+
+  const api = (path, opts = {}) => fetch(SB + "/auth/v1" + path, {
+    ...opts,
+    headers: { apikey: KEY, "Content-Type": "application/json", ...(opts.headers || {}) },
+  });
+
+  $("save").onclick = async () => {
+    const pw = $("pw").value, pw2 = $("pw2").value;
+    $("msg").textContent = "";
+    if (pw.length < 6) return ($("msg").textContent = "비밀번호는 6자 이상이어야 해요.");
+    if (pw !== pw2) return ($("msg").textContent = "두 비밀번호가 서로 달라요.");
+    $("save").disabled = true;
+    try {
+      // 버튼을 눌렀을 때 처음으로 토큰을 사용 → 메일 보안검사가 링크를 미리 열어도 만료되지 않음
+      if (!accessToken) {
+        const r = await api("/verify", { method: "POST", body: JSON.stringify({ type: "recovery", token_hash: tokenHash }) });
+        if (!r.ok) return show("bad");
+        accessToken = (await r.json()).access_token;
+      }
+      const r = await api("/user", {
+        method: "PUT",
+        headers: { Authorization: "Bearer " + accessToken },
+        body: JSON.stringify({ password: pw }),
+      });
+      if (r.ok) return show("done");
+      const e = await r.json().catch(() => ({}));
+      const m = (e.msg || e.message || e.error_description || "") + "";
+      $("msg").textContent = /different from the old/i.test(m) ? "이전 비밀번호와 다른 비밀번호를 써 주세요."
+        : /expired|invalid/i.test(m) ? "링크가 만료됐어요. 앱에서 비밀번호 찾기를 다시 눌러 주세요."
+        : "바꾸지 못했어요. 잠시 후 다시 시도해 주세요. (" + (m || r.status) + ")";
+    } catch {
+      $("msg").textContent = "인터넷 연결을 확인하고 다시 시도해 주세요.";
+    } finally {
+      $("save").disabled = false;
+    }
+  };
+</script>
+</body>
+</html>
